@@ -1,33 +1,39 @@
-﻿using DanbooruDownloader.Utilities;
+﻿using BooruDownloader.Utilities;
+using HtmlAgilityPack;
 using Microsoft.Data.Sqlite;
 using Newtonsoft.Json.Linq;
 using NLog;
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Security.Cryptography;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 
-namespace DanbooruDownloader.Commands
+namespace BooruDownloader.Commands
 {
     public class DumpCommand
     {
         static Logger Log = LogManager.GetCurrentClassLogger();
+        
+        private const string weirdDateFormat = "ddd MMM d HH:mm:ss zz00 yyyy";
 
-        public static async Task Run(string path, long startId, long endId, bool ignoreHashCheck, bool includeDeleted)
+        public static async Task Run(string path, long startId, long endId, int parallelDownloads, bool ignoreHashCheck, bool includeDeleted)
         {
             string tempFolderPath = Path.Combine(path, "_temp");
             string imageFolderPath = Path.Combine(path, "images");
-            string metadataDatabasePath = Path.Combine(path, "danbooru.sqlite");
+            string metadataDatabasePath = Path.Combine(path, "realbooru.sqlite");
             string lastPostJsonPath = Path.Combine(path, "last_post.json");
-
+            
             PathUtility.CreateDirectoryIfNotExists(path);
             PathUtility.CreateDirectoryIfNotExists(tempFolderPath);
             PathUtility.CreateDirectoryIfNotExists(imageFolderPath);
+
 
             using (SqliteConnection connection = new SqliteConnection(new SqliteConnectionStringBuilder
             {
@@ -46,7 +52,7 @@ namespace DanbooruDownloader.Commands
                     await TaskUtility.RunWithRetry(async () =>
                     {
                         Log.Info($"Downloading metadata ... ({startId} ~ )");
-                        postJObjects = await DanbooruUtility.GetPosts(startId);
+                        postJObjects = await RealBooruUtility.GetPosts(startId);
                     }, e =>
                     {
                         Log.Error(e);
@@ -107,7 +113,7 @@ namespace DanbooruDownloader.Commands
                             {
                                 Post cachedPost = ConvertToPost(JObject.Parse(File.ReadAllText(metadataPath)));
 
-                                if (cachedPost == null || post.UpdatedDate > cachedPost.UpdatedDate)
+                                if (cachedPost == null)
                                 {
                                     post.ShouldSaveMetadata = true;
                                     post.ShouldUpdateImage = true;
@@ -156,12 +162,12 @@ namespace DanbooruDownloader.Commands
                     {
                         Log.Info($"{shouldUpdateCount}/{posts.Length} posts are updated. {pendingCount} posts are pending. Downloading {shouldDownloadCount} posts ...");
                     }
-
-                    foreach (Post post in posts)
+                    var semaphore = new Semaphore(parallelDownloads, parallelDownloads);
+                    Parallel.ForEach(posts, async post =>
                     {
                         if (!post.IsValid)
                         {
-                            continue;
+                            return;
                         }
 
                         string metadataPath = GetPostLocalMetadataPath(imageFolderPath, post);
@@ -169,7 +175,7 @@ namespace DanbooruDownloader.Commands
                         string tempImagePath = GetPostTempImagePath(tempFolderPath, post);
 
                         PathUtility.CreateDirectoryIfNotExists(Path.GetDirectoryName(imagePath));
-
+                        semaphore.WaitOne();
                         try
                         {
                             await TaskUtility.RunWithRetry(async () =>
@@ -218,10 +224,14 @@ namespace DanbooruDownloader.Commands
                         }
                         catch (NotRetryableException)
                         {
-                            Log.Error($"Can't retryable exception was occured : Id={post.Id}");
+                            Log.Error($"Unretryable exception was occured : Id={post.Id}");
                             post.IsValid = false;
                         }
-                    }
+                        finally
+                        {
+                            semaphore.Release();
+                        }
+                    });
 
                     Log.Info("Updating database ...");
                     SQLiteUtility.InsertOrReplace(connection, posts.Where(p => p.IsValid).Select(p => p.JObject));
@@ -242,20 +252,38 @@ namespace DanbooruDownloader.Commands
                 Log.Info("Dump command is complete.");
             }
         }
+        
 
         static Post ConvertToPost(JObject jsonObject)
         {
+
             try
             {
-                var id = jsonObject.GetValue("id").ToString();
-                var md5 = jsonObject.GetValue("md5")?.ToString() ?? "";
-                var extension = jsonObject.GetValue("file_ext")?.ToString() ?? "";
-                var imageUrl = jsonObject.GetValue("file_url")?.ToString() ?? "";
-                var createdDate = DateTime.Parse(jsonObject.GetValue("created_at").ToString());
-                var updatedDate = jsonObject.GetValue("updated_at") != null ? DateTime.Parse(jsonObject.GetValue("updated_at").ToString()) : DateTime.Parse(jsonObject.GetValue("created_at").ToString());
+                if (jsonObject.GetValue("@id") == null && jsonObject.GetValue("id")!=null)
+                {
+                    //This is garbage code but thats what happens when we reuse half the code of another app.
+                    //Console.WriteLine(jsonObject.ToString());
+                    throw new Exception("File id "+ jsonObject.GetValue("id")+" already present in the database. Skipping.");
+                }
+                var id = jsonObject.GetValue("@id").ToString();
+                var md5 = jsonObject.GetValue("@md5")?.ToString() ?? "";
+                //Console.WriteLine(jsonObject.ToString());
+                //var imageUrl = jsonObject.GetValue("@file_url")?.ToString() ?? "";
+                var createdDate = DateTime.ParseExact(jsonObject.GetValue("@created_at").ToString(), weirdDateFormat, new CultureInfo("en-GB"));
+                var updatedDate = jsonObject.GetValue("@updated_at") != null ? DateTime.ParseExact(jsonObject.GetValue("@updated_at").ToString(), weirdDateFormat, new CultureInfo("en-GB")) : createdDate;
                 var isDeleted = jsonObject.GetValue("is_deleted")?.ToObject<bool>() ?? false;
                 var isPending = jsonObject.GetValue("is_pending")?.ToObject<bool>() ?? false;
 
+                HtmlAgilityPack.HtmlWeb web = new HtmlWeb();
+                HtmlAgilityPack.HtmlDocument doc = web.Load("https://realbooru.com/index.php?page=post&s=view&id="+id);
+                var imageUrl = doc.DocumentNode.SelectSingleNode("//img[@id='image']").Attributes["src"].Value;
+                var extension = System.IO.Path.GetExtension(imageUrl);
+                JObject newJsonObject = new JObject();
+                newJsonObject["id"] = id;
+                newJsonObject["md5"] = md5;
+                newJsonObject["file_ext"] = extension;
+                newJsonObject["tag_string"] = jsonObject.GetValue("@tags").ToString().Trim();
+                newJsonObject["tag_count_general"] = newJsonObject["tag_string"].ToString().Split(" ").Length;
                 Post post = new Post()
                 {
                     Id = id,
@@ -266,25 +294,26 @@ namespace DanbooruDownloader.Commands
                     UpdatedDate = updatedDate,
                     IsDeleted = isDeleted,
                     IsPending = isPending,
-                    JObject = jsonObject,
+                    JObject = newJsonObject,
+                    IsValid = ((extension == "jpeg")||(extension == "jpg")||(extension=="png"))
                 };
 
                 if (post.UpdatedDate < post.CreatedDate)
                 {
                     post.UpdatedDate = post.CreatedDate;
                 }
-
                 return post;
             }
-            catch
+            catch (Exception ex)
             {
+                Console.WriteLine(ex.Message);
                 return null;
             }
         }
 
         static string GetPostLocalMetadataPath(string imageFolderPath, Post post)
         {
-            return Path.Combine(imageFolderPath, post.Md5.Substring(0, 2), $"{post.Md5}-danbooru.json");
+            return Path.Combine(imageFolderPath, post.Md5.Substring(0, 2), $"{post.Md5}-realbooru.json");
         }
 
         static string GetPostLocalImagePath(string imageFolderPath, Post post)
@@ -312,6 +341,7 @@ namespace DanbooruDownloader.Commands
 
         static async Task Download(string uri, string path)
         {
+            //Console.WriteLine(uri);
             using (HttpClient client = new HttpClient())
             {
                 HttpResponseMessage response = await client.GetAsync(uri, HttpCompletionOption.ResponseHeadersRead);
@@ -319,7 +349,10 @@ namespace DanbooruDownloader.Commands
                 switch (response.StatusCode)
                 {
                     case HttpStatusCode.Forbidden:
+                        Console.WriteLine("Forbiden");
+                        throw new NotRetryableException();
                     case HttpStatusCode.NotFound:
+                        Console.WriteLine("NotFound");
                         throw new NotRetryableException();
                 }
 

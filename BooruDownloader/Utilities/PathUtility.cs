@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Text;
 
-namespace DanbooruDownloader.Utilities
+namespace BooruDownloader.Utilities
 {
     public static class PathUtility
     {

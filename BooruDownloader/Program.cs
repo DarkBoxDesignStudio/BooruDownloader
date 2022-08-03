@@ -1,9 +1,10 @@
-﻿using DanbooruDownloader.Commands;
+﻿using BooruDownloader.Commands;
+using BooruDownloader.Utilities;
 using Microsoft.Extensions.CommandLineUtils;
 using Microsoft.Extensions.PlatformAbstractions;
 using System;
 
-namespace DanbooruDownloader
+namespace BooruDownloader
 {
     class Program
     {
@@ -11,7 +12,7 @@ namespace DanbooruDownloader
         {
             CommandLineApplication application = new CommandLineApplication(true)
             {
-                FullName = "Danbooru Downloader",
+                FullName = "Booru Downloader",
             };
 
             application.HelpOption("-?|-h|--help");
@@ -28,12 +29,14 @@ namespace DanbooruDownloader
                 var endIdOption = command.Option("-e|--end-id <id>", "Ending Id. Default is 0 (unlimited).).", CommandOptionType.SingleValue);
                 var ignoreHashCheckOption = command.Option("-i|--ignore-hash-check", "Ignore hash check.", CommandOptionType.NoValue);
                 var includeDeletedOption = command.Option("-d|--deleted", "Include deleted posts.", CommandOptionType.NoValue);
+                var parallelDownloadsOption = command.Option("-p|--parallel-downloads <value>", "Number of images to download simultaneously. Default is 5.", CommandOptionType.SingleValue);
 
                 command.OnExecute(() =>
                 {
                     string path = outputPathArgument.Value;
                     long startId = 1;
                     long endId = 0;
+                    int parallelDownloads = 5;
                     bool ignoreHashCheck = ignoreHashCheckOption.HasValue();
                     bool includeDeleted = includeDeletedOption.HasValue();
 
@@ -48,8 +51,12 @@ namespace DanbooruDownloader
                         Console.WriteLine("Invalid end id.");
                         return -2;
                     }
-
-                    DumpCommand.Run(path, startId, endId, ignoreHashCheck, includeDeleted).Wait();
+                    if (parallelDownloadsOption.HasValue() && !int.TryParse(parallelDownloadsOption.Value(), out parallelDownloads))
+                    {
+                        Console.WriteLine("Invalid number of parallel downloads.");
+                        return -2;
+                    }
+                    DumpCommand.Run(path, startId, endId, parallelDownloads, ignoreHashCheck, includeDeleted).Wait();
 
                     return 0;
                 });
