@@ -17,7 +17,7 @@ namespace BooruDownloader.Utilities
     {
         public static string GetPostsUrl(long startId)
         {
-            string query = $"-tagme -webm -gif -animated -sound -video id:>={startId} sort:id:asc";
+            string query = $"-webm -gif -animated -sound -video -user:rb id:>={startId} sort:id:asc";
             string urlEncodedQuery = WebUtility.UrlEncode(query);
             return $"https://realbooru.com/index.php?page=dapi&s=post&q=index&tags={urlEncodedQuery}&pid=0&limit=100";
         }
