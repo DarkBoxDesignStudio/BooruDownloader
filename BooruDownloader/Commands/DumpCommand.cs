@@ -23,7 +23,7 @@ namespace BooruDownloader.Commands
         
         private const string weirdDateFormat = "ddd MMM d HH:mm:ss zz00 yyyy";
 
-        public static async Task Run(string path, long startId, long endId, int parallelDownloads, bool ignoreHashCheck, bool includeDeleted)
+        public static async Task Run(string path, long startId, long endId, int parallelDownloads, bool ignoreHashCheck, bool includeDeleted, string booruSite)
         {
             string tempFolderPath = Path.Combine(path, "_temp");
             string imageFolderPath = Path.Combine(path, "images");
@@ -52,7 +52,7 @@ namespace BooruDownloader.Commands
                     await TaskUtility.RunWithRetry(async () =>
                     {
                         Log.Info($"Downloading metadata ... ({startId} ~ )");
-                        postJObjects = await RealBooruUtility.GetPosts(startId);
+                        postJObjects = await RealBooruUtility.GetPosts(startId, booruSite);
                     }, e =>
                     {
                         Log.Error(e);
@@ -69,15 +69,15 @@ namespace BooruDownloader.Commands
 
                     // Validate post
                     Log.Info($"Checking {postJObjects.Length} posts ...");
-                    Post[] posts = postJObjects.Select(p => ConvertToPost(p))
-                        .Where(p => p != null && (endId <= 0 || long.Parse(p.Id) <= endId))
-                        .ToArray();
-
-                    if (posts.Length == 0)
+                    Post[] posts = postJObjects.Select(p =>
                     {
-                        Log.Info("There is no valid posts.");
-                        break;
-                    }
+                        Log.Trace($"Converting JObject to Post: {p}");
+                        var post = ConvertToPost(p, booruSite);
+                        Log.Trace($"Converted JObject to Post: {post}");
+                        return post;
+                    })
+                    .Where(p => p != null && (endId <= 0 || long.Parse(p.Id) <= endId))
+                    .ToArray();
 
                     Parallel.ForEach(posts, post =>
                     {
@@ -111,7 +111,7 @@ namespace BooruDownloader.Commands
                         {
                             if (File.Exists(metadataPath))
                             {
-                                Post cachedPost = ConvertToPost(JObject.Parse(File.ReadAllText(metadataPath)));
+                                Post cachedPost = ConvertToPost(JObject.Parse(File.ReadAllText(metadataPath)), booruSite);
 
                                 if (cachedPost == null)
                                 {
@@ -182,10 +182,14 @@ namespace BooruDownloader.Commands
                             {
                                 if (post.ShouldDownloadImage)
                                 {
-                                    Log.Info($"Downloading post {post.Id} ...");
+                                    Log.Info($"Downloading post {post.Id} at {post.ImageUrl} ...");
                                     await Download(post.ImageUrl, tempImagePath);
+                                    Log.Info($"Downloaded image saved to: {tempImagePath}");
+
 
                                     string downloadedMd5 = GetMd5Hash(tempImagePath);
+                                    Log.Trace($"Calculated MD5 hash for downloaded image: {downloadedMd5}");
+
 
                                     if (downloadedMd5 != post.Md5)
                                     {
@@ -252,18 +256,16 @@ namespace BooruDownloader.Commands
                 Log.Info("Dump command is complete.");
             }
         }
-        
 
-        static Post ConvertToPost(JObject jsonObject)
+        static Post ConvertToPost(JObject jsonObject, string baseUrl)
         {
-
             try
             {
-                if (jsonObject.GetValue("@id") == null && jsonObject.GetValue("id")!=null)
+                if (jsonObject.GetValue("@id") == null && jsonObject.GetValue("id") != null)
                 {
                     //This is garbage code but thats what happens when we reuse half the code of another app.
                     //Console.WriteLine(jsonObject.ToString());
-                    throw new Exception("File id "+ jsonObject.GetValue("id")+" already present in the database. Skipping.");
+                    throw new Exception("File id " + jsonObject.GetValue("id") + " already present in the database. Skipping.");
                 }
                 var id = jsonObject.GetValue("@id").ToString();
                 var md5 = jsonObject.GetValue("@md5")?.ToString() ?? "";
@@ -275,7 +277,7 @@ namespace BooruDownloader.Commands
                 var isPending = jsonObject.GetValue("is_pending")?.ToObject<bool>() ?? false;
 
                 HtmlAgilityPack.HtmlWeb web = new HtmlWeb();
-                HtmlAgilityPack.HtmlDocument doc = web.Load("https://realbooru.com/index.php?page=post&s=view&id="+id);
+                HtmlAgilityPack.HtmlDocument doc = web.Load(baseUrl + "/index.php?page=post&s=view&id=" + id);
                 var imageUrl = doc.DocumentNode.SelectSingleNode("//img[@id='image']").Attributes["src"].Value;
                 var extension = System.IO.Path.GetExtension(imageUrl);
                 JObject newJsonObject = new JObject();
@@ -295,7 +297,7 @@ namespace BooruDownloader.Commands
                     IsDeleted = isDeleted,
                     IsPending = isPending,
                     JObject = newJsonObject,
-                    IsValid = ((extension == "jpeg")||(extension == "jpg")||(extension=="png"))
+                    IsValid = ((extension == "jpeg") || (extension == "jpg") || (extension == "png"))
                 };
 
                 if (post.UpdatedDate < post.CreatedDate)

@@ -11,18 +11,18 @@ namespace BooruDownloader.Utilities
 {
     public static class RealBooruUtility
     {
-        public static string GetPostsUrl(long startId)
+        public static string GetPostsUrl(long startId, string booruSite)
         {
             string query = $"-webm -gif -animated -sound -video -user:rb id:>={startId} sort:id:asc";
             string urlEncodedQuery = WebUtility.UrlEncode(query);
-            return $"https://realbooru.com/index.php?page=dapi&s=post&q=index&tags={urlEncodedQuery}&pid=0&limit=100";
+            return $"{booruSite}/index.php?page=dapi&s=post&q=index&tags={urlEncodedQuery}&pid=0&limit=10";
         }
 
-        public static async Task<JObject[]> GetPosts(long startId)
+        public static async Task<JObject[]> GetPosts(long startId, string booruSite)
         {
             using (HttpClient client = new HttpClient())
             {
-                string url = GetPostsUrl(startId);
+                string url = GetPostsUrl(startId, booruSite);
                 string xmlResp = await client.GetStringAsync(url);
                 XmlDocument doc = new XmlDocument();
                 doc.LoadXml(xmlResp);
