@@ -1,18 +1,14 @@
 ﻿using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using System;
-using System.Collections.Generic;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
-using System.Text;
 using System.Threading.Tasks;
 using System.Xml;
 
 namespace BooruDownloader.Utilities
 {
-
-
     public static class RealBooruUtility
     {
         public static string GetPostsUrl(long startId)
@@ -31,15 +27,10 @@ namespace BooruDownloader.Utilities
                 XmlDocument doc = new XmlDocument();
                 doc.LoadXml(xmlResp);
                 string jsonText = JsonConvert.SerializeXmlNode(doc);
-                
-                
 
-                //Console.WriteLine("-----------JRAI-------");
-                JObject Jo = JObject.Parse(jsonText);
-                JArray jsonArray = (JArray)Jo["posts"]["post"];
-               //Console.WriteLine(jsonArray.ToString());
-                var res = jsonArray.Cast<JObject>().ToArray();
-                return res;
+                JObject root = JObject.Parse(jsonText);
+                JArray jsonArray = (JArray)root["posts"]["post"];
+                return jsonArray.Cast<JObject>().ToArray();
             }
         }
     }
